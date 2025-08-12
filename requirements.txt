@@ -1,0 +1,59 @@
+# requirements.txt
+
+# Core Django Framework
+Django>=4.2,<5.0
+
+# PostgreSQL Database Driver
+psycopg2-binary>=2.9
+
+# Django Extensions and Developer Tools
+django-extensions>=3.2
+ipython
+
+# Environment Variable Management
+python-decouple>=3.8
+python-dotenv>=1.0.1
+
+# Security Enhancements
+django-cors-headers>=4.0.0
+django-ratelimit>=4.1.0
+django-axes>=6.0.0
+
+# REST Framework
+djangorestframework>=3.14.0
+drf-yasg>=1.21.7  # API documentation
+
+# JWT Authentication
+SimpleJWT>=5.3.0
+
+# GeoIP and GeoLocation
+geoip2>=4.7.0
+
+# CAPTCHA Support
+django-simple-captcha>=0.5.17
+
+# Task Queue (optional)
+celery>=5.3.4
+redis>=5.0.0
+
+# Testing and Debugging
+django-debug-toolbar>=4.2
+coverage>=7.3
+pytest>=7.4
+pytest-django>=4.5
+
+# Linting and Formatting
+black>=24.3
+flake8>=6.1
+isort>=5.13
+
+# Frontend (Optional for templates/static)
+django-compressor>=4.4
+
+# Internationalization Support (optional)
+Babel>=2.14
+
+# Logging
+loguru>=0.7.2
+
+# Lock file will be handled via `pip freeze > requirements.lock`
