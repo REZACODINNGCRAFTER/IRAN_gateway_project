@@ -1,0 +1,22 @@
+# logs/auth.log
+
+[2025-07-14 09:01:22] INFO: User 'jdoe' successfully authenticated from IP 192.168.1.101
+[2025-07-14 09:02:35] WARNING: Failed login attempt for username 'unknown_user' from IP 203.0.113.12
+[2025-07-14 09:03:02] INFO: Password reset requested for user 'jdoe'
+[2025-07-14 09:03:05] INFO: OTP sent to user 'jdoe'
+[2025-07-14 09:04:10] ERROR: Multiple failed OTP submissions for user 'jdoe' from IP 192.168.1.101
+[2025-07-14 09:05:45] INFO: 2FA verification successful for user 'jdoe'
+[2025-07-14 09:06:00] INFO: User 'admin' logged out
+[2025-07-14 09:06:12] WARNING: Login attempt throttled for IP 203.0.113.12 (exceeded rate limit)
+[2025-07-14 09:06:25] INFO: User 'jdoe' accessed dashboard from IP 192.168.1.101
+[2025-07-14 09:07:40] INFO: Session expired for user 'jdoe'
+[2025-07-14 09:08:15] INFO: User 'admin' enabled IP whitelisting
+[2025-07-14 09:08:42] WARNING: User 'jdoe' attempted access to restricted resource
+[2025-07-14 09:09:10] INFO: Role updated for user 'jdoe' from 'user' to 'editor' by 'admin'
+[2025-07-14 09:09:33] INFO: JWT token issued for user 'jdoe'
+[2025-07-14 09:09:58] WARNING: User 'unknown_user' attempted login using expired token
+[2025-07-14 09:10:20] INFO: API request rate limit hit for user 'jdoe'
+[2025-07-14 09:10:45] INFO: Email verification sent to 'jdoe@example.com'
+[2025-07-14 09:11:12] ERROR: Suspicious activity detected: repeated login attempts from IP 198.51.100.24
+[2025-07-14 09:12:01] INFO: MFA device registered for user 'jdoe'
+[2025-07-14 09:13:29] INFO: User 'admin' accessed audit logs

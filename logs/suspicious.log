@@ -1,0 +1,20 @@
+# logs/suspicious.log
+
+[2025-07-14 09:03:55] ALERT: Repeated failed login attempts for user 'admin' from IP 203.0.113.99
+[2025-07-14 09:04:22] ALERT: User 'guest' attempted SQL injection in login field
+[2025-07-14 09:05:00] CRITICAL: Access attempt from blacklisted IP 198.51.100.42
+[2025-07-14 09:05:31] ALERT: Brute-force detected on endpoint /api/token/ from IP 192.0.2.77
+[2025-07-14 09:06:04] WARNING: Multiple token refreshes within short timeframe for user 'jdoe'
+[2025-07-14 09:06:59] ALERT: Suspicious header detected in request to /admin/ from IP 198.51.100.24
+[2025-07-14 09:07:45] CRITICAL: Login attempt from known TOR node 185.220.101.1
+[2025-07-14 09:08:13] ALERT: Possible session hijack — session ID reused by different IPs for user 'jdoe'
+[2025-07-14 09:08:55] WARNING: POST request anomaly — oversized payload to /gateway/login/
+[2025-07-14 09:09:40] ALERT: Invalid CSRF token submitted to /accounts/register/ from IP 203.0.113.56
+[2025-07-14 09:10:12] CRITICAL: Excessive 401 errors in /api/ endpoints triggered rate limiting
+[2025-07-14 09:10:55] ALERT: User agent mismatch detected for session token belonging to user 'admin'
+[2025-07-14 09:11:20] WARNING: Suspicious activity pattern — failed login followed by password reset request for user 'jane_d'
+[2025-07-14 09:12:03] CRITICAL: IP 192.0.2.91 accessed sensitive endpoint /internal/debug/ without authorization
+[2025-07-14 09:12:47] ALERT: Repeated XSS attempt detected in GET parameter on /search/?q=<script>
+[2025-07-14 09:13:35] WARNING: Session cookie reuse detected across multiple devices for user 'samir'
+[2025-07-14 09:14:22] ALERT: Bot-like traffic detected from IP 198.51.100.78 (user-agent anomaly)
+[2025-07-14 09:15:10] CRITICAL: Multiple account enumeration attempts via /accounts/lookup/
