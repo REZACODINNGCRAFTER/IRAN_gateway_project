@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OTP Verification | Secure Gateway</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <script defer src="/static/js/otp_timer.js"></script>
+</head>
+<body class="bg-light text-center">
+  <main class="otp-wrapper">
+    <section class="otp-panel">
+      <h1 class="heading-lg">Two-Factor Verification</h1>
+      <p class="text-muted">Enter the 6-digit code sent to your registered device.</p>
+
+      <form method="post" action="{% url 'gateway:otp_verify' %}" class="otp-form">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger" role="alert">
+            {{ form.non_field_errors }}
+          </div>
+        {% endif %}
+
+        <div class="form-group">
+          <label for="otp">OTP Code</label>
+          {{ form.otp }}
+          {% if form.otp.errors %}
+            <div class="form-error">{{ form.otp.errors }}</div>
+          {% endif %}
+        </div>
+
+        <div class="form-group">
+          <label for="language">Language Preference</label>
+          <select name="language" id="language" class="form-control">
+            <option value="en">English</option>
+            <option value="fa">Farsi</option>
+            <option value="fr">French</option>
+          </select>
+        </div>
+
+        <div class="form-check">
+          <input type="checkbox" name="trusted_device" id="trusted_device" class="form-check-input">
+          <label for="trusted_device" class="form-check-label">Trust this device for 30 days</label>
+        </div>
+
+        <div class="form-timer mt-3">
+          <span id="countdown">OTP expires in: <strong>05:00</strong></span>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block mt-4">Verify OTP</button>
+      </form>
+
+      <div class="footer-links mt-4">
+        <p><a href="{% url 'gateway:resend_otp' %}">Resend Code</a></p>
+        <p><a href="{% url 'gateway:login' %}">Back to Login</a></p>
+        <p class="text-small">
+          <a href="{% url 'privacy_policy' %}">Privacy Policy</a> | 
+          <a href="{% url 'security_notice' %}">Security Notice</a>
+        </p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

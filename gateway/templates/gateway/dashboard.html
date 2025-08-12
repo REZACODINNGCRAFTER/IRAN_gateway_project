@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure Gateway Dashboard</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <script defer src="/static/js/dashboard_widgets.js"></script>
+</head>
+<body>
+  <header class="dashboard-header">
+    <h1>Hello, {{ request.user.get_full_name|default:request.user.username }}</h1>
+    <nav>
+      <ul class="nav-links">
+        <li><a href="{% url 'gateway:dashboard' %}">Home</a></li>
+        <li><a href="{% url 'accounts:profile' %}">My Profile</a></li>
+        <li><a href="{% url 'accounts:notifications' %}">Alerts</a></li>
+        <li><a href="{% url 'accounts:logout' %}">Sign Out</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="dashboard-main">
+    <section class="dashboard-grid">
+
+      <article class="widget">
+        <h2>Recent Logins</h2>
+        <ul>
+          {% for log in recent_logins %}
+            <li>{{ log.timestamp }} — {{ log.ip_address }}</li>
+          {% empty %}
+            <li>No login history available.</li>
+          {% endfor %}
+        </ul>
+      </article>
+
+      <article class="widget">
+        <h2>Security Status</h2>
+        <p>Two-Factor Authentication: <strong>{% if request.user.profile.two_factor_enabled %}Enabled{% else %}Disabled{% endif %}</strong></p>
+        <p>Password Last Changed: <strong>{{ request.user.profile.password_last_changed|date:"Y-m-d" }}</strong></p>
+        <a class="btn" href="{% url 'accounts:security_settings' %}">Update Security Settings</a>
+      </article>
+
+      <article class="widget">
+        <h2>Account Overview</h2>
+        <p>Email Address: <strong>{{ request.user.email }}</strong></p>
+        <p>Assigned Roles: <strong>{% for role in request.user.groups.all %}{{ role.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</strong></p>
+        <a class="btn" href="{% url 'accounts:edit_profile' %}">Edit Account</a>
+      </article>
+
+      <article class="widget">
+        <h2>Activity History</h2>
+        <ul>
+          {% for activity in activity_log %}
+            <li>{{ activity.timestamp|date:"M d, Y H:i" }} — {{ activity.action }}</li>
+          {% empty %}
+            <li>No activities logged.</li>
+          {% endfor %}
+        </ul>
+      </article>
+
+      <article class="widget">
+        <h2>Quick Tools</h2>
+        <button class="btn-outline" onclick="location.href='{% url 'accounts:change_password' %}'">Change Password</button>
+        <button class="btn-outline" onclick="location.href='{% url 'gateway:report_issue' %}'">Report an Issue</button>
+        <button class="btn-outline" onclick="location.href='{% url 'gateway:download_logs' %}'">Download Logs</button>
+        <button class="btn-outline" onclick="location.href='{% url 'gateway:refresh_session' %}'">Renew Session</button>
+      </article>
+
+      <article class="widget">
+        <h2>System Alerts</h2>
+        <ul>
+          {% for alert in alerts %}
+            <li class="alert alert-{{ alert.level }}">{{ alert.message }}</li>
+          {% empty %}
+            <li>No active alerts.</li>
+          {% endfor %}
+        </ul>
+      </article>
+
+      <article class="widget">
+        <h2>System Metrics</h2>
+        <ul>
+          <li>Total Logins: <strong>{{ metrics.login_count }}</strong></li>
+          <li>Failed Logins: <strong>{{ metrics.failed_logins }}</strong></li>
+          <li>Sessions Active: <strong>{{ metrics.active_sessions }}</strong></li>
+        </ul>
+      </article>
+
+    </section>
+  </main>
+
+  <footer class="dashboard-footer">
+    <p>&copy; {{ year|default:2025 }} Secure Gateway — All Rights Reserved.</p>
+  </footer>
+</body>
+</html>

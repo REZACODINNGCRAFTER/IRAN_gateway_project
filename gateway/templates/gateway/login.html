@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure Gateway Login</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <main class="login-container">
+    <section class="login-card">
+      <h1 class="login-title">Sign in to Secure Gateway</h1>
+      <form method="post" action="{% url 'gateway:login' %}" class="login-form">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">
+            {{ form.non_field_errors }}
+          </div>
+        {% endif %}
+
+        <div class="form-group">
+          <label for="username">Username</label>
+          {{ form.username }}
+          {% if form.username.errors %}
+            <small class="error">{{ form.username.errors }}</small>
+          {% endif %}
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          {{ form.password }}
+          {% if form.password.errors %}
+            <small class="error">{{ form.password.errors }}</small>
+          {% endif %}
+        </div>
+
+        {% if form.captcha %}
+        <div class="form-group">
+          <label for="captcha">CAPTCHA</label>
+          {{ form.captcha }}
+          {% if form.captcha.errors %}
+            <small class="error">{{ form.captcha.errors }}</small>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if form.otp %}
+        <div class="form-group">
+          <label for="otp">OTP</label>
+          {{ form.otp }}
+          {% if form.otp.errors %}
+            <small class="error">{{ form.otp.errors }}</small>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if form.fingerprint %}
+        <div class="form-group">
+          <label for="fingerprint">Device Fingerprint</label>
+          {{ form.fingerprint }}
+          {% if form.fingerprint.errors %}
+            <small class="error">{{ form.fingerprint.errors }}</small>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="form-group">
+          <label class="checkbox-inline">
+            {{ form.remember_me }} Remember Me
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label for="language">Language</label>
+          <select name="language" id="language">
+            <option value="en">English</option>
+            <option value="fa">Farsi</option>
+            <option value="fr">French</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-inline">
+            <input type="checkbox" name="accept_terms" required>
+            I accept the <a href="/terms">terms and conditions</a>
+          </label>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Login</button>
+      </form>
+
+      <footer class="login-footer">
+        <p><a href="{% url 'password_reset' %}">Forgot Password?</a></p>
+        <p><a href="{% url 'accounts:register' %}">Create an Account</a></p>
+        <p>
+          <a href="{% url 'privacy_policy' %}">Privacy Policy</a> |
+          <a href="{% url 'security_notice' %}">Security Notice</a>
+        </p>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>
