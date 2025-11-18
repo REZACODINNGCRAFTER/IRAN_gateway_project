@@ -1,189 +1,229 @@
 import logging
-import json
 from typing import Dict, Optional, Any
 from django.conf import settings
 from django.http import HttpRequest
 from django.utils import timezone
+from django.core.cache import cache
+from zeep import Client, Plugin
+from zeep.transports import Transport
+import requests
 
 logger = logging.getLogger(__name__)
 
 
+class SOAPLogPlugin(Plugin):
+    """Simple Zeep plugin to log SOAP envelopes"""
+    def egress(self, envelope, http_headers, operation, binding_options):
+        logger.debug("SOAP Request [%s]: %s", operation.name, envelope)
+        return envelope, http_headers
+
+    def ingress(self, envelope, http_headers, operation, binding_options):
+        logger.debug("SOAP Response [%s]: %s", operation.name, envelope)
+        return envelope, http_headers
+
+
 class MellatBankGateway:
-    BASE_URL = "https://bpm.shaparak.ir/pgwchannel/services/pgw?wsdl"
+    WSDL_URL = "https://bpm.shaparak.ir/pgwchannel/services/pgw?wsdl"
     PAYMENT_REDIRECT_URL = "https://bpm.shaparak.ir/pgwchannel/startpay.mellat?RefId={ref_id}"
-    GATEWAY_IBAN = ""
+
+    STATUS_MESSAGES = {
+        "0": "تراکنش موفق",
+        "11": "شماره کارت نامعتبر است",
+        "12": "موجودی کافی نیست",
+        "13": "رمز دوم اشتباه است",
+        "14": "تعداد دفعات وارد کردن رمز بیش از حد مجاز است",
+        "15": "کارت نامعتبر است",
+        "16": "دفعات برداشت وجه بیش از حد مجاز است",
+        "17": "کاربر از انجام تراکنش منصرف شده است",
+        "18": "تاریخ انقضای کارت گذشته است",
+        "19": "مبلغ برداشت وجه بیش از حد مجاز است",
+        "21": "پذیرنده نامعتبر است",
+        "23": "خطای امنیتی رخ داده است",
+        "24": "اطلاعات کاربری پذیرنده نامعتبر است",
+        "25": "مبلغ نامعتبر است",
+        "31": "پاسخ نامعتبر است",
+        "32": "فرمت اطلاعات وارد شده صحیح نمی‌باشد",
+        "41": "شماره درخواست تکراری است",
+        "42": "تراکنش Sale یافت نشد",
+        "43": "قبلا درخواست Verify داده شده است",
+        "44": "درخواست Verify یافت نشد",
+        "45": "تراکنش Settle شده است",
+        "46": "تراکنش Settle نشده است",
+        "47": "تراکنش Settle یافت نشد",
+        "48": "تراکنش Reverse شده است",
+        "51": "تراکنش تکراری است",
+        "54": "تراکنش مرجع موجود نیست",
+        "55": "تراکنش نامعتبر است",
+        "61": "خطا در واریز",
+    }
 
     def __init__(self, terminal_id=None, username=None, password=None):
-        self.terminal_id = terminal_id or settings.MELLAT_TERMINAL_ID
-        self.username = username or settings.MELLAT_USERNAME
-        self.password = password or settings.MELLAT_PASSWORD
+        self.terminal_id = str(terminal_id or getattr(settings, "MELLAT_TERMINAL_ID", "")).zfill(8)
+        self.username = username or getattr(settings, "MELLAT_USERNAME", "")
+        self.password = password or getattr(settings, "MELLAT_PASSWORD", "")
 
-    def get_gateway_name(self) -> str:
-        return "MellatBank"
-
-    def get_gateway_iban(self) -> str:
-        return self.GATEWAY_IBAN
-
-    def build_payment_url(self, ref_id: str) -> str:
-        return self.PAYMENT_REDIRECT_URL.format(ref_id=ref_id)
-
-    def generate_transaction_id(self, order_id: str) -> str:
-        return f"{order_id}-{timezone.now().strftime('%Y%m%d%H%M%S')}"
-
-    def generate_local_datetime(self) -> str:
-        return timezone.now().strftime("%Y/%m/%d %H:%M:%S")
-
-    def format_amount(self, amount: int) -> str:
-        return f"{amount:,}"
+        self.client: Optional[Client] = None
+        if self.has_required_credentials():
+            transport = Transport(timeout=30)
+            self.client = Client(self.WSDL_URL, transport=transport, plugins=[SOAPLogPlugin()])
 
     def has_required_credentials(self) -> bool:
-        return all([self.terminal_id, self.username, self.password])
+        return bool(self.terminal_id and self.username and self.password)
 
-    def request_payment(self, order_id: str, amount: int, callback_url: str) -> Dict:
-        if not self.has_required_credentials():
-            return self._handle_error("Missing credentials", Exception("Incomplete configuration"))
+    def _local_date(self) -> str:
+        return timezone.now().strftime("%Y%m%d")
 
-        payload = self._build_payment_payload(order_id, amount, callback_url)
-        response = self._simulate_gateway_response("request")
-        ref_id = response.get("refId")
-        return {
-            "ref_id": ref_id,
-            "payment_url": self.build_payment_url(ref_id)
-        }
+    def _local_time(self) -> str:
+        return timezone.now().strftime("%H%M%S")
 
-    def verify_payment(self, sale_order_id: str, sale_reference_id: str) -> Dict:
-        payload = self._build_verification_payload(sale_order_id, sale_reference_id)
-        return self._simulate_gateway_response("verify")
+    def _cache_key(self, prefix: str, order_id: str) -> str:
+        return f"mellat_{prefix}_{order_id}"
 
-    def reverse_payment(self, sale_order_id: str, sale_reference_id: str) -> Dict:
-        payload = self._build_verification_payload(sale_order_id, sale_reference_id)
-        return self._simulate_gateway_response("reverse")
+    # ===================================================================
+    # Public API
+    # ===================================================================
+    def request_payment(self, order_id: str, amount: int, callback_url: str) -> Dict[str, Any]:
+        """Step 1 – Request payment and receive RefId"""
+        if not self.has_required_credentials() or not self.client:
+            return self._error("Gateway credentials missing")
 
-    def cancel_transaction(self, order_id: str) -> Dict:
-        return self._simulate_gateway_response("cancel")
-
-    def handle_callback(self, request: HttpRequest) -> Dict:
         try:
-            data = self._parse_callback(request)
-            if not self._validate_callback_fields(data):
-                raise ValueError("Missing callback data")
+            response = self.client.service.bpPayRequest(
+                terminalId=self.terminal_id,
+                userName=self.username,
+                userPassword=self.password,
+                orderId=order_id,
+                amount=amount,
+                localDate=self._local_date(),
+                localTime=self._local_time(),
+                additionalData="",
+                callBackUrl=callback_url,
+                payerId=0,
+            )
 
-            if data.get("ResCode") != "0":
-                raise ValueError(self.get_status_message(data.get("ResCode")))
+            # Mellat returns string like "0,123456789012" or just "41" on error
+            if not response or "," not in response:
+                return self._error(self.STATUS_MESSAGES.get(response, response or "empty"), response)
 
-            result = self.verify_payment(data["SaleOrderId"], data["SaleReferenceId"])
-            result.update(data)
-            self._log_transaction(result, success=True)
-            return result
-        except Exception as e:
-            self._log_transaction(locals().get("data", {}), success=False)
-            return self._handle_error("Callback failed", e)
+            res_code, ref_id = response.split(",", 1)
+            if res_code != "0":
+                return self._error(self.STATUS_MESSAGES.get(res_code, res_code), res_code)
 
-    def get_status_message(self, code: Optional[str]) -> str:
-        return {
-            "0": "Transaction successful",
-            "11": "Invalid card number",
-            "12": "Insufficient funds",
-            "13": "Incorrect PIN",
-            "17": "User cancelled transaction",
-            "23": "Invalid expiration date",
-        }.get(code, f"Unknown error code: {code}")
+            return {
+                "success": True,
+                "ref_id": ref_id.strip(),
+                "payment_url": self.PAYMENT_REDIRECT_URL.format(ref_id=ref_id.strip()),
+            }
 
-    def build_callback_payload(self, request: HttpRequest) -> Dict:
+        except Exception as exc:
+            logger.exception("bpPayRequest failed")
+            return self._error("Connection error", "connection_error")
+
+    def verify_payment(self, order_id: str, sale_reference_id: str) -> Dict[str, Any]:
+        return self._call_with_cache(
+            "verify", order_id, sale_reference_id,
+            self.client.service.bpVerifyRequest
+        )
+
+    def settle_payment(self, order_id: str, sale_reference_id: str) -> Dict[str, Any]:
+        return self._call_with_cache(
+            "settle", order_id, sale_reference_id,
+            self.client.service.bpSettleRequest
+        )
+
+    def reverse_payment(self, order_id: str, sale_reference_id: str) -> Dict[str, Any]:
+        return self._call_with_cache(
+            "reverse", order_id, sale_reference_id,
+            self.client.service.bpReversalRequest
+        )
+
+    def _call_with_cache(self, action: str, order_id: str, sale_reference_id: str, method) -> Dict[str, Any]:
+        """Prevents duplicate verify/settle/reverse calls"""
+        cache_key = self._cache_key(action, order_id)
+        if cache.get(cache_key):
+            return {"success": True, "cached": True, "result": "0"}
+
+        try:
+            res = method(
+                terminalId=self.terminal_id,
+                userName=self.username,
+                userPassword=self.password,
+                orderId=order_id,
+                saleOrderId=order_id,
+                saleReferenceId=sale_reference_id,
+            )
+            res = str(res).strip()
+            if res != "0":
+                return self._error(self.STATUS_MESSAGES.get(res, res), res)
+
+            cache.set(cache_key, True, timeout=60 * 60 * 24)  # 24h safety
+            return {"success": True, "result": res}
+
+        except Exception as exc:
+            logger.exception("%s failed for order %s", action.capitalize(), order_id)
+            return self._error(f"{action.capitalize()} failed")
+
+    # ===================================================================
+    # Callback handling
+    # ===================================================================
+    def handle_callback(self, request: HttpRequest) -> Dict[str, Any]:
         data = self._parse_callback(request)
-        data.update({
-            "timestamp": self.generate_local_datetime(),
-            "gateway": self.get_gateway_name()
-        })
-        return data
 
-    def summarize_transaction(self, data: Dict) -> str:
-        ref = data.get("SaleReferenceId", "")
-        masked_ref = ref[:4] + "****" + ref[-4:] if len(ref) > 8 else ref
-        amount = self.format_amount(int(data.get("FinalAmount", 0)))
-        return f"Order ID: {data.get('SaleOrderId')} | Ref: {masked_ref} | Amount: {amount}"
+        res_code = data.get("ResCode")
+        if not res_code or res_code != "0":
+            msg = self.STATUS_MESSAGES.get(res_code, "خطای ناشناخته")
+            self._log_transaction(data, success=False)
+            return self._error(msg, res_code)
 
-    def get_callback_data_as_json(self, request: HttpRequest) -> str:
-        return json.dumps(self._parse_callback(request), ensure_ascii=False, indent=2)
+        order_id = data["SaleOrderId"]
+        ref_id = data["SaleReferenceId"]
 
-    def is_valid_ref_id(self, ref_id: str) -> bool:
-        return ref_id.isdigit() and len(ref_id) >= 6
+        # Step 1: Verify
+        verify_res = self.verify_payment(order_id, ref_id)
+        if not verify_res.get("success"):
+            self._log_transaction({**data, "verify": verify_res}, success=False)
+            return verify_res
 
-    def is_successful_transaction(self, data: Dict) -> bool:
-        return data.get("result") == "0"
+        # Step 2: Settle
+        settle_res = self.settle_payment(order_id, ref_id)
+        if not settle_res.get("success"):
+            # Try to reverse on settle failure
+            self.reverse_payment(order_id, ref_id)
+            self._log_transaction({**data, "settle": settle_res}, success=False)
+            return settle_res
 
-    def extract_error_code(self, response: Dict[str, Any]) -> Optional[str]:
-        return response.get("errorCode") or response.get("ResCode")
-
-    def extract_ref_id(self, response: Dict[str, Any]) -> Optional[str]:
-        return response.get("refId")
-
-    def notify_admin(self, message: str, data: Optional[Dict] = None) -> None:
-        logger.warning("ADMIN NOTICE | %s | DATA: %s", message, json.dumps(data or {}))
-
-    def retry_payment(self, order_id: str, amount: int, callback_url: str) -> Dict:
-        return self.request_payment(order_id, amount, callback_url)
-
-    def simulate_test_payment(self, order_id: str, amount: int) -> Dict:
-        test_ref = "TEST123456"
-        return {
-            "ref_id": test_ref,
-            "payment_url": self.build_payment_url(test_ref),
-            "OrderId": order_id,
-            "Amount": amount,
-            "message": "Simulated test payment."
+        result = {
+            "success": True,
+            "order_id": order_id,
+            "reference_id": ref_id,
+            "card_pan": data.get("CardHolderPan"),
+            "amount": data.get("FinalAmount"),
+            "status": "paid_and_settled",
         }
+        self._log_transaction({**data, **result}, success=True)
+        return result
 
-    def _parse_callback(self, request: HttpRequest) -> Dict:
-        try:
-            return {key: request.POST.get(key) for key in (
-                "RefId", "ResCode", "SaleOrderId", "SaleReferenceId",
-                "CardHolderPan", "FinalAmount", "HashedCardNumber"
-            )}
-        except Exception as e:
-            logger.error("Failed to parse callback: %s", e)
-            return {}
-
-    def _validate_callback_fields(self, data: Dict) -> bool:
-        required_keys = ("SaleOrderId", "SaleReferenceId")
-        return all(data.get(k) for k in required_keys)
+    def _parse_callback(self, request: HttpRequest) -> Dict[str, str]:
+        keys = ["RefId", "ResCode", "SaleOrderId", "SaleReferenceId", "CardHolderPan", "FinalAmount"]
+        return {k: (request.POST.get(k) or "").strip() for k in keys}
 
     def _log_transaction(self, data: Dict, success: bool = True) -> None:
         status = "SUCCESS" if success else "FAILURE"
-        logger.info("%s | Transaction Data: %s", status, json.dumps(data, ensure_ascii=False))
+        logger.info("MELLAT | %s | %s", status, json.dumps(data, ensure_ascii=False))
 
-    def _handle_error(self, msg: str, exception: Exception) -> Dict:
-        logger.error("%s: %s", msg, exception)
-        return {"success": False, "error": str(exception)}
+    def _error(self, message: str, code: Optional[str] = None) -> Dict[str, Any]:
+        result = {"success": False, "error": message}
+        if code:
+            result["error_code"] = code
+        logger.warning("MELLAT ERROR | %s | Code: %s", message, code or "-")
+        return result
 
-    def _build_payment_payload(self, order_id: str, amount: int, callback_url: str) -> Dict:
-        now = timezone.now()
+    # Test helper
+    def simulate_test_payment(self, order_id: str, amount: int) -> Dict[str, Any]:
+        ref_id = f"999{hash(order_id) % 1000000:06d}"
         return {
-            "terminalId": self.terminal_id,
-            "userName": self.username,
-            "userPassword": self.password,
-            "orderId": order_id,
-            "amount": amount,
-            "localDate": now.strftime("%Y%m%d"),
-            "localTime": now.strftime("%H%M%S"),
-            "callBackUrl": callback_url,
-            "payerId": 0,
+            "success": True,
+            "ref_id": ref_id,
+            "payment_url": self.PAYMENT_REDIRECT_URL.format(ref_id=ref_id),
+            "message": "Test mode – no real transaction",
         }
-
-    def _build_verification_payload(self, sale_order_id: str, sale_reference_id: str) -> Dict:
-        return {
-            "terminalId": self.terminal_id,
-            "userName": self.username,
-            "userPassword": self.password,
-            "orderId": sale_order_id,
-            "saleReferenceId": sale_reference_id,
-        }
-
-    def _simulate_gateway_response(self, action: str) -> Dict[str, Any]:
-        mock_responses = {
-            "request": {"result": "0", "refId": "123456789"},
-            "verify": {"result": "0"},
-            "cancel": {"result": "0", "message": "Transaction cancelled"},
-            "reverse": {"result": "0", "message": "Transaction reversed"},
-        }
-        return mock_responses.get(action, {"result": "-1"})
