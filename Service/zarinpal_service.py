@@ -1,147 +1,238 @@
-import requests
-import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Dict, Any, Optional
 from django.conf import settings
 from django.http import HttpRequest
 from django.utils import timezone
+from django.core.cache import cache
+import requests
 
 logger = logging.getLogger(__name__)
 
 
 class ZarinpalService:
     """
-    Clean and maintainable integration with Zarinpal Payment Gateway.
-    Documentation: https://docs.zarinpal.com/paymentGateway
+    Production-ready Zarinpal Payment Gateway integration (v4 API – 2025)
+    Official Docs: https://docs.zarinpal.com/paymentGateway/v4
     """
 
+    # Production URLs
     BASE_URL = "https://api.zarinpal.com/pg/v4/payment"
-    START_PAYMENT_PATH = "/request.json"
-    VERIFY_PAYMENT_PATH = "/verify.json"
     GATEWAY_URL = "https://www.zarinpal.com/pg/StartPay"
-    MERCHANT_ID = settings.ZARINPAL_MERCHANT_ID
 
-    def request_payment(self, order_id: str, amount: int, callback_url: str, description: str = "") -> Dict[str, Any]:
-        payload = {
-            "merchant_id": self.MERCHANT_ID,
-            "amount": amount,
-            "callback_url": callback_url,
-            "description": description or f"Payment for order #{order_id}",
-            "metadata": {"order_id": order_id},
-        }
-        logger.debug("Sending payment request", extra=payload)
+    # Sandbox URLs
+    SANDBOX_BASE_URL = "https://sandbox.zarinpal.com/pg/v4/payment"
+    SANDBOX_GATEWAY_URL = "https://sandbox.zarinpal.com/pg/StartPay"
+
+    STATUS_MESSAGES = {
+        100: "پرداخت موفق",
+        101: "پرداخت قبلاً تأیید شده",
+        -1: "اطلاعات ناقص",
+        -2: "مرچنت کد یا IP نامعتبر",
+        -3: "مبلغ کمتر از حداقل مجاز",
+        -9: "درخواست نامعتبر",
+        -11: "درخواست تکراری",
+        -30: "تراکنش قبلاً وریفای شده",
+        -33: "مبلغ با پرداخت مطابقت ندارد",
+        -51: "تراکنش ناموفق",
+        -54: "درخواست آرشیو شده",
+    }
+
+    def __init__(self, sandbox: bool = False):
+        self.sandbox = sandbox or getattr(settings, "ZARINPAL_SANDBOX", False)
+        self.merchant_id = getattr(settings, "ZARINPAL_MERCHANT_ID", "")
+        self.base_url = self.SANDBOX_BASE_URL if self.sandbox else self.BASE_URL
+        self.gateway_url = self.SANDBOX_GATEWAY_URL if self.sandbox else self.GATEWAY_URL
+
+        if not self.merchant_id:
+            logger.error("ZARINPAL_MERCHANT_ID is not configured in settings!")
+
+    def _post(self, endpoint: str, payload: Dict) -> Dict[str, Any]:
         try:
-            response = requests.post(f"{self.BASE_URL}{self.START_PAYMENT_PATH}", json=payload)
+            response = requests.post(
+                f"{self.base_url}{endpoint}",
+                json=payload,
+                timeout=30,
+                headers={"Content-Type": "application/json"},
+            )
             response.raise_for_status()
-            data = response.json().get("data", {})
-            return {
-                **data,
-                "payment_url": f"{self.GATEWAY_URL}/{data.get('authority')}"
-            }
+            return response.json()
         except requests.RequestException as e:
-            logger.exception("Zarinpal payment request failed")
-            return {"success": False, "error": str(e)}
+            logger.exception("Zarinpal API error: %s", e)
+            return {"data": {}, "errors": {"code": -999, "message": "خطای ارتباط با زرین‌پال"}}
+
+    def request_payment(
+        self,
+        amount: int,
+        callback_url: str,
+        description: str = "پرداخت سفارش",
+        order_id: Optional[str] = None,
+        mobile: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create payment request → return payment URL"""
+        if not self.merchant_id:
+            return {"success": False, "error": "مرچنت آیدی تنظیم نشده است"}
+
+        if amount < 1000:
+            return {"success": False, "error": "مبلغ باید حداقل ۱۰۰۰ ریال باشد"}
+
+        payload = {
+            "merchant_id": self.merchant_id,
+            "amount": amount,
+            "description": description,
+            "callback_url": callback_url,
+        }
+
+        # Metadata (recommended)
+        metadata = {}
+        if order_id:
+            metadata["order_id"] = str(order_id)
+        if mobile:
+            metadata["mobile"] = mobile
+        if email:
+            metadata["email"] = email
+        if metadata:
+            payload["metadata"] = metadata
+
+        result = self._post("/request.json", payload)
+        data = result.get("data", {})
+        errors = result.get("errors", {})
+
+        if data.get("code") == 100:
+            authority = data["authority"]
+            payment_url = f"{self.gateway_url}/{authority}"
+
+            # Prevent duplicate payment requests
+            cache.set(f"zarinpal_request_{authority}", True, timeout=600)  # 10 min
+
+            return {
+                "success": True,
+                "authority": authority,
+                "payment_url": payment_url,
+                "fee": data.get("fee", 0),
+                "fee_type": data.get("fee_type", "Merchant"),
+            }
+
+        return {
+            "success": False,
+            "error_code": errors.get("code"),
+            "error_message": errors.get("message", self.STATUS_MESSAGES.get(errors.get("code"), "خطای ناشناخته")),
+        }
 
     def verify_payment(self, authority: str, amount: int) -> Dict[str, Any]:
+        """Verify payment – idempotent & secure"""
+        cache_key = f"zarinpal_verified_{authority}"
+        if cache.get(cache_key):
+            ref_id = cache.get(cache_key)
+            logger.info("Payment already verified: %s → %s", authority, ref_id)
+            return {"success": True, "already_verified": True, "ref_id": ref_id}
+
         payload = {
-            "merchant_id": self.MERCHANT_ID,
+            "merchant_id": self.merchant_id,
+            "authority": authority,
             "amount": amount,
-            "authority": authority
         }
-        logger.debug("Sending payment verification", extra=payload)
-        try:
-            response = requests.post(f"{self.BASE_URL}{self.VERIFY_PAYMENT_PATH}", json=payload)
-            response.raise_for_status()
-            return response.json().get("data", {})
-        except requests.RequestException as e:
-            logger.exception("Zarinpal payment verification failed")
-            return {"success": False, "error": str(e)}
+
+        result = self._post("/verify.json", payload)
+        data = result.get("data", {})
+        errors = result.get("errors", {})
+
+        code = data.get("code") or errors.get("code", -999)
+
+        response = {
+            "success": code in {100, 101},
+            "code": code,
+            "message": self.STATUS_MESSAGES.get(code, "وضعیت نامشخص"),
+            "ref_id": data.get("ref_id"),
+            "card_pan_masked": self._mask_card(data.get("card_pan")),
+            "card_hash": data.get("card_hash"),
+            "fee": data.get("fee"),
+            "fee_type": data.get("fee_type"),
+        }
+
+        if response["success"]:
+            cache.set(cache_key, response["ref_id"], timeout=60 * 60 * 24 * 90)  # 90 days
+
+        return response
 
     def handle_callback(self, request: HttpRequest) -> Dict[str, Any]:
+        """Main callback handler – NEVER trust Status=OK"""
         authority = request.GET.get("Authority")
-        status = request.GET.get("Status")
-        if not authority or not status:
-            logger.warning("Missing callback parameters", extra=request.GET.dict())
-            return {"success": False, "error": "Missing Authority or Status."}
+        status = request.GET.get("Status", "").upper()
+
+        if not authority:
+            return {"success": False, "error": "پارامتر Authority الزامی است"}
+
+        if status != "OK":
+            return {
+                "success": False,
+                "error": "پرداخت توسط کاربر لغو شد",
+                "status": status,
+            }
+
+        order_id = request.GET.get("order_id")
+        amount = self._get_order_amount(order_id, request)
+
+        if not amount:
+            logger.error("Order amount not found for order_id: %s", order_id)
+            return {"success": False, "error": "سفارش معتبر یافت نشد"}
+
+        verify_result = self.verify_payment(authority, amount)
+
+        if not verify_result["success"]:
+            logger.warning("Zarinpal verification failed: %s", verify_result)
+            return {
+                "success": False,
+                "authority": authority,
+                "error": verify_result["message"],
+                "error_code": verify_result["code"],
+            }
+
+        # Success!
         return {
+            "success": True,
             "authority": authority,
-            "status": status,
-            "success": status.upper() == "OK"
+            "ref_id": verify_result["ref_id"],
+            "card_pan_masked": verify_result["card_pan_masked"],
+            "message": "پرداخت با موفقیت تأیید شد",
+            "order_id": order_id,
         }
 
-    def format_verification_result(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "ref_id": data.get("ref_id"),
-            "card_pan": self.mask_card_pan(data.get("card_pan")),
-            "fee_type": data.get("fee_type"),
-            "fee": data.get("fee"),
-            "status": data.get("code"),
-            "message": data.get("message"),
-        }
+    def _get_order_amount(self, order_id: Optional[str], request: HttpRequest) -> Optional[int]:
+        """MUST be implemented in your project"""
+        if not order_id:
+            return None
 
-    def is_successful_payment(self, data: Dict[str, Any]) -> bool:
-        return data.get("code") == 100
+        # Recommended: Use signed session or cache
+        key = f"pending_payment_{order_id}"
+        amount = cache.get(key)
 
-    def extract_error_message(self, data: Dict[str, Any]) -> Optional[str]:
-        if isinstance(data.get("errors"), dict):
-            return data["errors"].get("message")
-        return data.get("message")
+        if amount is not None:
+            return int(amount)
 
-    def get_status_message(self, code: Optional[int]) -> str:
-        return {
-            100: "Payment successful.",
-            101: "Payment already verified.",
-            -1: "Incomplete information.",
-            -2: "Invalid merchant ID or IP.",
-            -3: "Amount below minimum.",
-        }.get(code, "Unknown status code.")
+        # Alternative: Query database
+        # from orders.models import Order
+        # try:
+        #     order = Order.objects.get(id=order_id, paid=False)
+        #     cache.set(key, order.amount, timeout=1800)  # 30 min
+        #     return order.amount
+        # except Order.DoesNotExist:
+        #     return None
 
-    def summarize_transaction(self, data: Dict[str, Any]) -> str:
-        return (
-            f"Transaction: {data.get('ref_id')} | "
-            f"Card: {self.mask_card_pan(data.get('card_pan'))} | "
-            f"Amount: {data.get('fee')} {data.get('fee_type')} | "
-            f"Status: {data.get('code')} - {data.get('message')}"
-        )
+        return None
 
-    def normalize_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        code = data.get("code")
-        return {
-            "reference_id": data.get("ref_id"),
-            "masked_card": self.mask_card_pan(data.get("card_pan")),
-            "status_code": code,
-            "message": self.get_status_message(code),
-            "timestamp": timezone.now().isoformat()
-        }
+    @staticmethod
+    def _mask_card(pan: Optional[str]) -> str:
+        if not pan or len(pan) < 10:
+            return "****-****-****-****"
+        return f"{pan[:6]}******{pan[-4:]}"
 
-    def create_audit_log(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "action": action,
-            "timestamp": timezone.now().isoformat(),
-            "payload": payload
-        }
-
-    def should_retry(self, code: Optional[int]) -> bool:
-        return code in {-1, -3}
-
-    def get_callback_payload(self, request: HttpRequest) -> Dict[str, Optional[str]]:
-        return {
-            "authority": request.GET.get("Authority"),
-            "status": request.GET.get("Status"),
-            "order_id": request.GET.get("order_id")
-        }
-
-    def attach_client_metadata(self, data: Dict[str, Any], user_agent: str, ip: str) -> Dict[str, Any]:
-        return {
-            **data,
-            "user_agent": user_agent,
-            "ip_address": ip
-        }
+    def get_status_message(self, code: int) -> str:
+        return self.STATUS_MESSAGES.get(code, "وضعیت نامشخص")
 
     def log_transaction(self, data: Dict[str, Any]) -> None:
-        logger.info("Transaction log", extra={"transaction": data})
-
-    def mask_card_pan(self, pan: Optional[str]) -> str:
-        if not pan or len(pan) < 6:
-            return "****-****-****-****"
-        return f"{pan[:6]}-****-****-{pan[-4:]}"
+        safe_data = data.copy()
+        if "card_pan" in safe_data:
+            safe_data["card_pan_masked"] = self._mask_card(safe_data["card_pan"])
+            del safe_data["card_pan"]
+        logger.info("ZARINPAL TRANSACTION | %s", safe_data)
