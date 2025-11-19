@@ -81,7 +81,8 @@ This project is licensed under the MIT License.
 
 ## Contributors
 
-* [Your Name](https://github.com/your-username) - Lead Developer
+* [ Reza Torabi ](https://github.com/rezatutor475) - Lead Developer
+* [  phoenix marie  ](https://github.com/phoenixmariepornstaractress) - CO Developer
 
 ---
 
